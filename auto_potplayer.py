@@ -37,15 +37,21 @@ VIDEO_DIRS = []
 update_video_dirs_from_dpl()
 
 def ffprobe_resolution(path):
-    """用 ffprobe 获取分辨率"""
+    """用 ffprobe 获取分辨率的前两行"""
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+             "-show_entries", "stream=width,height",
+             "-of", "default=nokey=1:noprint_wrappers=1", path],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2
         )
-        w, h = map(int, result.stdout.strip().split(","))
-        return w, h
+        lines = result.stdout.strip().split()
+        if len(lines) >= 2:
+            w, h = map(int, lines[:2])
+            return w, h
+        else:
+            logging.warning(f"ffprobe 输出不足2行: {result.stdout.strip()}")
+            return 1920, 1080
     except Exception as e:
         logging.warning(f"获取分辨率失败: {e}")
         return 1920, 1080
