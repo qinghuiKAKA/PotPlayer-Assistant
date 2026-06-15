@@ -37,21 +37,52 @@ VIDEO_DIRS = []
 update_video_dirs_from_dpl()
 
 def ffprobe_resolution(path):
-    """用 ffprobe 获取分辨率的前两行"""
     try:
+        # 单次调用获取完整流信息，超时增加到8秒
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "default=nokey=1:noprint_wrappers=1", path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2
+             "-show_streams", "-of", "json", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8
         )
-        lines = result.stdout.strip().split()
-        if len(lines) >= 2:
-            w, h = map(int, lines[:2])
-            return w, h
-        else:
-            logging.warning(f"ffprobe 输出不足2行: {result.stdout.strip()}")
-            return 1920, 1080
+        
+        import json
+        data = json.loads(result.stdout)
+        stream = data.get("streams", [{}])[0]
+        
+        w = int(stream.get("width", 1920))
+        h = int(stream.get("height", 1080))
+        
+        # 解析旋转信息（兼容多种格式）
+        rotation = 0
+        
+        # 方法1: 部分版本直接在 stream 里有 rotation 字段
+        if "rotation" in stream:
+            rotation = float(stream["rotation"])
+        
+        # 方法2: 在 side_data_list 中查找
+        if not rotation:
+            for sd in stream.get("side_data_list", []):
+                if "rotation" in sd:
+                    rotation = float(sd["rotation"])
+                    break
+                # iPhone 原相机视频通常是 Display Matrix
+                if sd.get("type") == "Display Matrix":
+                    # 旧版 ffmpeg 可能只有 displaymatrix，没有 rotation
+                    # 这里保守处理：有 Display Matrix 大概率是竖屏
+                    rotation = 90
+                    logging.info(f"检测到 Display Matrix，判定为竖屏视频")
+                    break
+        
+        # 90° 或 270° 旋转需要交换宽高
+        if abs(rotation) in [90, 270]:
+            w, h = h, w
+            logging.info(f"视频旋转 {rotation}°，实际显示分辨率: {w}x{h} ({'横屏' if w >= h else '竖屏'})")
+            
+        return w, h
+
+    except subprocess.TimeoutExpired:
+        logging.warning(f"ffprobe 超时: {path}，使用默认分辨率")
+        return 1920, 1080
     except Exception as e:
         logging.warning(f"获取分辨率失败: {e}")
         return 1920, 1080
